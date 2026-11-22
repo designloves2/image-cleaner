@@ -54,7 +54,7 @@ pub fn is_newer(remote: &str, local: &str) -> bool {
     a > b
 }
 
-fn fetch_latest() -> Result<Option<Release>, String> {
+fn fetch_latest(current: &str) -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let mut resp = agent()
         .get(&url)
@@ -65,7 +65,7 @@ fn fetch_latest() -> Result<Option<Release>, String> {
     let txt = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
     let tag = v["tag_name"].as_str().unwrap_or("").to_string();
-    if tag.is_empty() || !is_newer(&tag, CURRENT) {
+    if tag.is_empty() || !is_newer(&tag, current) {
         return Ok(None);
     }
     let assets = v["assets"].as_array().cloned().unwrap_or_default();
@@ -107,7 +107,7 @@ fn set(shared: &Shared, ctx: &Context, s: UpdateState) {
 /// 백그라운드에서 새 버전 확인. auto_download 이면 발견 즉시 내려받는다.
 pub fn check(shared: Shared, ctx: Context, auto_download: bool) {
     set(&shared, &ctx, UpdateState::Checking);
-    std::thread::spawn(move || match fetch_latest() {
+    std::thread::spawn(move || match fetch_latest(CURRENT) {
         Ok(Some(rel)) => {
             set(&shared, &ctx, UpdateState::Available(rel.clone()));
             if auto_download {
@@ -179,5 +179,14 @@ mod tests {
         assert!(is_newer("2.0", "1.9.9"));
         assert!(!is_newer("1.0.0", "1.0.0"));
         assert!(!is_newer("v0.9.9", "1.0.0"));
+    }
+
+    /// 실제 GitHub 릴리스를 조회하는 네트워크 테스트: cargo test -- --ignored
+    #[test]
+    #[ignore]
+    fn finds_published_release() {
+        let r = fetch_latest("0.0.1").expect("조회 성공").expect("새 버전 발견");
+        assert!(r.url.ends_with(".exe") && r.sha256.as_deref().map(|h| h.len()) == Some(64), "{r:?}");
+        assert!(fetch_latest("999.0.0").unwrap().is_none());
     }
 }
