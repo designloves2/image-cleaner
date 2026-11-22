@@ -31,6 +31,8 @@ pub struct Options {
     pub trash_source: bool,
     /// true 면 모든 이미지 파일명 뒤에 원본 폴더명을 접미사로 붙인다 (예: IMG_001_여행.jpg)
     pub suffix_all: bool,
+    /// true 면 폴더명을 파일명 앞(접두어: 여행_IMG_001.jpg), false 면 뒤(접미사: IMG_001_여행.jpg)에 붙인다
+    pub label_prefix: bool,
     pub dry_run: bool,
 }
 
@@ -130,12 +132,17 @@ fn folder_label(src: &Path, level: usize) -> String {
     parts[parts.len().saturating_sub(level)..].join("_")
 }
 
-fn suffixed_name(orig: &str, src: &Path, level: usize) -> String {
+fn suffixed_name(orig: &str, src: &Path, level: usize, prefix: bool) -> String {
     if level == 0 {
         return orig.to_string();
     }
-    let (stem, ext) = split_name(orig);
-    format!("{stem}_{}{ext}", folder_label(src, level))
+    let label = folder_label(src, level);
+    if prefix {
+        format!("{label}_{orig}")
+    } else {
+        let (stem, ext) = split_name(orig);
+        format!("{stem}_{label}{ext}")
+    }
 }
 
 /// 출력 폴더에서 실제로 쓸 경로를 정한다. Ok(None) => 출력 폴더에 이미 동일 파일이 있음.
@@ -310,7 +317,7 @@ pub fn run(opt: Options, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
         for _ in 0..8 {
             let mut seen: HashMap<(PathBuf, String), Vec<usize>> = HashMap::new();
             for k in 0..keep.len() {
-                let nm = suffixed_name(&orig_names[k], &files[keep[k]].0, level[k]).to_lowercase();
+                let nm = suffixed_name(&orig_names[k], &files[keep[k]].0, level[k], opt.label_prefix).to_lowercase();
                 seen.entry((dirs[k].clone(), nm)).or_default().push(k);
             }
             let mut changed = false;
@@ -328,8 +335,8 @@ pub fn run(opt: Options, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
     let plan: Vec<(PathBuf, String, Option<String>)> = (0..keep.len())
         .map(|k| {
             let src = &files[keep[k]].0;
-            let name = suffixed_name(&orig_names[k], src, level[k]);
-            let alt = if level[k] == 0 { Some(suffixed_name(&orig_names[k], src, 1)) } else { None };
+            let name = suffixed_name(&orig_names[k], src, level[k], opt.label_prefix);
+            let alt = if level[k] == 0 { Some(suffixed_name(&orig_names[k], src, 1, opt.label_prefix)) } else { None };
             (dirs[k].clone(), name, alt)
         })
         .collect();
@@ -446,7 +453,7 @@ mod tests {
         png(&s.join("c/x.png"), 200); // 이름만 같고 내용 다름 → 이름 변경
         png(&s.join("c/y.png"), 90);
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s.clone(), output: o.clone(), by_year: true, trash_source: false, suffix_all: false, dry_run: false },
+        run(Options { source: s.clone(), output: o.clone(), by_year: true, trash_source: false, suffix_all: false, label_prefix: false, dry_run: false },
             tx, Arc::new(AtomicBool::new(false)));
         let rep = rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap();
         assert_eq!((rep.scanned, rep.duplicates, rep.renamed, rep.copied, rep.errors), (4, 1, 2, 3, 0));
@@ -457,7 +464,7 @@ mod tests {
         assert_eq!(names, vec!["x_a.png", "x_c.png", "y.png"]);
         // 재실행해도 이미 있는 동일 파일은 중복 처리되어 늘어나지 않음
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s, output: o.clone(), by_year: true, trash_source: false, suffix_all: false, dry_run: false }, tx, Arc::new(AtomicBool::new(false)));
+        run(Options { source: s, output: o.clone(), by_year: true, trash_source: false, suffix_all: false, label_prefix: false, dry_run: false }, tx, Arc::new(AtomicBool::new(false)));
         let _ = rx.iter().count();
         assert_eq!(fs::read_dir(o.join(&year)).unwrap().count(), 3);
     }
@@ -471,7 +478,7 @@ mod tests {
         png(&s.join("b/x_copy.png"), 10); // 중복
         png(&s.join("c/y.png"), 90);
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s.clone(), output: o.clone(), by_year: false, trash_source: true, suffix_all: false, dry_run: false },
+        run(Options { source: s.clone(), output: o.clone(), by_year: false, trash_source: true, suffix_all: false, label_prefix: false, dry_run: false },
             tx, Arc::new(AtomicBool::new(false)));
         let rep = rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap();
         assert_eq!((rep.copied, rep.duplicates, rep.trashed, rep.errors), (2, 1, 3, 0));
@@ -488,7 +495,7 @@ mod tests {
 
     fn run_opts(s: &Path, o: &Path, suffix_all: bool) -> Report {
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s.to_path_buf(), output: o.to_path_buf(), by_year: false, trash_source: false, suffix_all, dry_run: false },
+        run(Options { source: s.to_path_buf(), output: o.to_path_buf(), by_year: false, trash_source: false, suffix_all, label_prefix: false, dry_run: false },
             tx, Arc::new(AtomicBool::new(false)));
         rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap()
     }
@@ -523,5 +530,28 @@ mod tests {
         let n = names_in(&o);
         assert_eq!(n, vec!["p_1_x.png", "p_2_x.png"]);
         assert!(n.iter().all(|x| !x.contains('(')));
+    }
+
+    #[test]
+    fn prefix_mode_puts_folder_name_in_front() {
+        let base = std::env::temp_dir().join("ic_test_prefix");
+        let _ = fs::remove_dir_all(&base);
+        let (s, o) = (base.join("src"), base.join("out"));
+        png(&s.join("2021-05/p.png"), 10);
+        png(&s.join("2022-01/p.png"), 200); // 이름 충돌: 양쪽 모두 접두어
+        png(&s.join("2023-03/q.png"), 90);
+        let (tx, rx) = std::sync::mpsc::channel();
+        run(Options { source: s.clone(), output: o.clone(), by_year: false, trash_source: false, suffix_all: false, label_prefix: true, dry_run: false },
+            tx, Arc::new(AtomicBool::new(false)));
+        let rep = rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap();
+        assert_eq!((rep.copied, rep.errors), (3, 0));
+        assert_eq!(names_in(&o), vec!["2021-05_p.png", "2022-01_p.png", "q.png"]);
+        // 전체 적용 옵션과 함께
+        let o2 = base.join("out2");
+        let (tx, rx) = std::sync::mpsc::channel();
+        run(Options { source: s, output: o2.clone(), by_year: false, trash_source: false, suffix_all: true, label_prefix: true, dry_run: false },
+            tx, Arc::new(AtomicBool::new(false)));
+        let _ = rx.iter().count();
+        assert_eq!(names_in(&o2), vec!["2021-05_p.png", "2022-01_p.png", "2023-03_q.png"]);
     }
 }

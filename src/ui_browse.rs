@@ -36,6 +36,7 @@ impl App {
                     ui.painter().rect_filled(r, 8.0, p.accent);
                     paint_icon(ui.painter(), r.center(), Align2::CENTER_CENTER, ic::PHOTO, 16.0, p.on_accent);
                     ui.label(RichText::new("Image Cleaner").strong().size(16.0));
+                    ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).size(12.5).color(p.weak));
                     ui.add_space(22.0);
                     let mut t = self.tab;
                     let bin_label = if self.bin_items.is_empty() { "휴지통".to_string() } else { format!("휴지통 ({})", self.bin_items.len()) };
@@ -101,7 +102,7 @@ impl App {
                     }
                     if let Some(d) = self.selected_dir.clone() {
                         if icon_btn(ui, p, ic::MERGE, "현재 폴더 정리하기…", false).clicked() {
-                            self.quick = Some(QuickOrg { out: suggest_output(&d), src: d, by_year: self.org.by_year, trash_source: self.org.trash_source, suffix_all: self.org.suffix_all });
+                            self.quick = Some(QuickOrg { out: suggest_output(&d), src: d, by_year: self.org.by_year, trash_source: self.org.trash_source, suffix_all: self.org.suffix_all, label_prefix: self.org.label_prefix });
                         }
                     }
                     ui.add_space(8.0);
@@ -300,6 +301,7 @@ impl App {
                     by_year: self.org.by_year,
                     trash_source: self.org.trash_source,
                     suffix_all: self.org.suffix_all,
+                    label_prefix: self.org.label_prefix,
                 });
                 ui.close();
             }

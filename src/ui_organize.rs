@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 /// 옵션 카드: 연도별 분류 + 원본 처리(유지 / 앱 휴지통으로 보관)
-pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, suffix_all: &mut bool, trash_source: &mut bool, enabled: bool) {
+pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, suffix_all: &mut bool, label_prefix: &mut bool, trash_source: &mut bool, enabled: bool) {
     card(ui, p, |ui| {
         ui.set_min_width(ui.available_width());
         ui.add_enabled_ui(enabled, |ui| {
@@ -25,14 +25,20 @@ pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, suffix_all: &m
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("모든 파일명에 원본 폴더명 붙이기").strong());
-                    ui.label(RichText::new("여러 하위 폴더를 합칠 때 IMG_001_여행.jpg 처럼 출처 폴더명을 접미사로 추가").size(12.5).color(p.weak));
+                    ui.label(RichText::new("여러 하위 폴더를 합칠 때 출처 폴더명을 파일명 앞 또는 뒤에 추가").size(12.5).color(p.weak));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     switch(ui, p, suffix_all);
                 });
             });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("폴더명 위치");
+                segmented(ui, p, label_prefix, &[(false, "", "뒤 (접미사)"), (true, "", "앞 (접두어)")]);
+            });
+            ui.label(RichText::new(if *label_prefix { "예: 여행_IMG_001.jpg  — 날짜 폴더명을 앞에 두면 정렬이 잘 됩니다" } else { "예: IMG_001_여행.jpg" }).size(12.5).color(p.weak));
             if !*suffix_all {
-                ui.label(RichText::new("꺼져 있어도, 이미지는 다른데 파일명만 같은 경우에는 두 파일 모두 폴더명 접미사로 구분합니다 (번호 괄호 사용 안 함).").size(12.0).color(p.weak));
+                ui.label(RichText::new("꺼져 있어도, 이미지는 다른데 파일명만 같은 경우에는 두 파일 모두 위 방식으로 폴더명을 붙여 구분합니다 (번호 괄호 사용 안 함).").size(12.0).color(p.weak));
             }
             ui.add_space(6.0);
             ui.separator();
@@ -116,8 +122,9 @@ impl App {
         let idle = self.org.state == RunState::Idle;
         folder_field(ui, p, ic::FOLDER_OPEN, "원본 폴더", "하위 폴더까지 모두 스캔합니다 (폴더를 끌어다 놓아도 돼요)", &mut self.org.src, idle, true);
         folder_field(ui, p, ic::NEW_FOLDER, "출력 폴더", "정리된 이미지가 모이는 곳", &mut self.org.out, idle, false);
-        let (mut y, mut sx, mut t) = (self.org.by_year, self.org.suffix_all, self.org.trash_source);
-        options_card(ui, p, &mut y, &mut sx, &mut t, idle);
+        let (mut y, mut sx, mut lp, mut t) = (self.org.by_year, self.org.suffix_all, self.org.label_prefix, self.org.trash_source);
+        options_card(ui, p, &mut y, &mut sx, &mut lp, &mut t, idle);
+        self.org.label_prefix = lp;
         self.org.by_year = y;
         self.org.suffix_all = sx;
         self.org.trash_source = t;
@@ -178,7 +185,7 @@ impl App {
             ui.set_min_width(ui.available_width());
             for (a, b) in [
                 ("내용이 완전히 같은 이미지만 제거", "바이트 단위(BLAKE3 해시)로 비교해 비슷한 사진은 지우지 않아요."),
-                ("이름이 같아도 내용이 다르면 자동 변경", "photo.jpg, photo (1).jpg 처럼 덮어쓰기 없이 보존합니다."),
+                ("이름이 같아도 내용이 다르면 폴더명으로 구분", "두 파일 모두 원본 폴더명을 붙여 구분하고, 덮어쓰지 않습니다."),
                 ("실행 전에 미리 분석", "'미리 분석'으로 파일을 건드리지 않고 결과를 먼저 확인하세요."),
             ] {
                 ui.horizontal_top(|ui| {
@@ -598,7 +605,7 @@ impl App {
                 let mut out = q.out.clone();
                 folder_field(ui, p, ic::NEW_FOLDER, "결과 폴더", "정리된 이미지가 저장될 곳 (없으면 새로 만듭니다)", &mut out, true, false);
                 q.out = out;
-                options_card(ui, p, &mut q.by_year, &mut q.suffix_all, &mut q.trash_source, true);
+                options_card(ui, p, &mut q.by_year, &mut q.suffix_all, &mut q.label_prefix, &mut q.trash_source, true);
                 let ok = !q.out.trim().is_empty() && Path::new(&q.out) != q.src.as_path();
                 ui.horizontal(|ui| {
                     if button(ui, p, "", "취소", false, true).clicked() {
@@ -622,6 +629,7 @@ impl App {
             self.org.by_year = q.by_year;
             self.org.trash_source = q.trash_source;
             self.org.suffix_all = q.suffix_all;
+            self.org.label_prefix = q.label_prefix;
             self.tab = Tab::Organize;
             self.start_organize(dry);
         } else if close || r.should_close() {

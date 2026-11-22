@@ -17,7 +17,7 @@ fn main() -> eframe::Result {
         eframe::egui::IconData { width: r.width(), height: r.height(), rgba: r.into_raw() }
     });
     let mut vp = eframe::egui::ViewportBuilder::default()
-        .with_title("Image Cleaner")
+        .with_title(concat!("Image Cleaner v", env!("CARGO_PKG_VERSION")))
         .with_inner_size([1360.0, 840.0])
         .with_min_inner_size([960.0, 600.0]);
     if let Some(i) = icon {
@@ -25,7 +25,7 @@ fn main() -> eframe::Result {
     }
     let opts = eframe::NativeOptions { viewport: vp, centered: true, ..Default::default() };
     eframe::run_native(
-        "Image Cleaner",
+        concat!("Image Cleaner v", env!("CARGO_PKG_VERSION")),
         opts,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     )

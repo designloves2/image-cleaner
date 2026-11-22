@@ -131,6 +131,7 @@ pub struct QuickOrg {
     pub by_year: bool,
     pub trash_source: bool,
     pub suffix_all: bool,
+    pub label_prefix: bool,
 }
 
 pub struct Root {
@@ -145,6 +146,7 @@ pub struct Org {
     pub by_year: bool,
     pub trash_source: bool,
     pub suffix_all: bool,
+    pub label_prefix: bool,
     pub state: RunState,
     pub dry: bool,
     pub stage: usize,
@@ -298,7 +300,7 @@ impl App {
             }
         }
         let mut org = Org {
-            src: String::new(), out: String::new(), by_year: true, trash_source: false, suffix_all: false,
+            src: String::new(), out: String::new(), by_year: true, trash_source: false, suffix_all: false, label_prefix: false,
             state: RunState::Idle, dry: false, stage: 0, phase: String::new(), progress: (0, 0),
             live: Live::default(), current: String::new(), started: Instant::now(), samples: vec![],
             last_sample: (Instant::now(), 0), log: vec![], report: None, show_report: false,
@@ -318,6 +320,7 @@ impl App {
                     "by_year" => org.by_year = v == "1",
                     "trash" => org.trash_source = v == "1",
                     "suffix" => org.suffix_all = v == "1",
+                    "prefix" => org.label_prefix = v == "1",
                     "auto_update" => auto_update = v == "1",
                     "thumb" => thumb = v.parse().unwrap_or(150.0),
                     "last_dir" => last_dir = Some(PathBuf::from(v)),
@@ -359,7 +362,7 @@ impl App {
                 "--no-update" => app.auto_update = false,
                 "--quick" => {
                     if let Some(d) = app.selected_dir.clone() {
-                        app.quick = Some(QuickOrg { out: crate::ui_organize::suggest_output(&d), src: d, by_year: true, trash_source: true, suffix_all: false });
+                        app.quick = Some(QuickOrg { out: crate::ui_organize::suggest_output(&d), src: d, by_year: true, trash_source: true, suffix_all: false, label_prefix: false });
                     }
                 }
                 "--run=dry" => app.start_organize(true),
@@ -376,9 +379,9 @@ impl App {
     pub fn save_settings(&self) {
         let Some(p) = settings_path() else { return };
         let mut s = format!(
-            "theme={}\nsrc={}\nout={}\nby_year={}\ntrash={}\nsuffix={}\nauto_update={}\nthumb={}\n",
+            "theme={}\nsrc={}\nout={}\nby_year={}\ntrash={}\nsuffix={}\nprefix={}\nauto_update={}\nthumb={}\n",
             if self.dark { "dark" } else { "light" }, self.org.src, self.org.out,
-            self.org.by_year as u8, self.org.trash_source as u8, self.org.suffix_all as u8, self.auto_update as u8, self.thumb
+            self.org.by_year as u8, self.org.trash_source as u8, self.org.suffix_all as u8, self.org.label_prefix as u8, self.auto_update as u8, self.thumb
         );
         if let Some(d) = &self.selected_dir {
             s += &format!("last_dir={}\n", d.display());
@@ -531,6 +534,7 @@ impl App {
             by_year: o.by_year,
             trash_source: o.trash_source,
             suffix_all: o.suffix_all,
+            label_prefix: o.label_prefix,
             dry_run: dry,
         };
         let c = o.cancel.clone();

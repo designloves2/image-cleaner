@@ -1,6 +1,6 @@
 [package]
 name = "image_cleaner"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 description = "Image Cleaner - 완전 중복 이미지 제거 · 병합 · 연도별 정리 도구 (native, Rust)"
 license = "GPL-3.0-or-later"
