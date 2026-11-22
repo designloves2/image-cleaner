@@ -1,0 +1,35 @@
+name: Release
+# v1.2.3 형태의 태그를 푸시하면 설치 파일을 빌드해 GitHub Release 로 게시합니다.
+# 앱은 이 릴리스를 조회해 자동으로 업데이트합니다.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 태그와 Cargo.toml 버전 확인
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $cargo) { throw "태그($tag)와 Cargo.toml 버전($cargo)이 다릅니다" }
+      - name: 테스트
+        run: cargo test --release --locked
+      - name: Inno Setup 설치
+        run: choco install innosetup -y --no-progress
+      - name: 설치 파일 빌드
+        shell: pwsh
+        run: ./installer/build.ps1
+      - name: 릴리스 게시
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            (Get-ChildItem dist/ImageCleaner-Setup-*.exe).FullName `
+            (Get-ChildItem dist/*.sha256).FullName `
+            --title "Image Cleaner ${{ github.ref_name }}" --generate-notes
