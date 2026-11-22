@@ -29,6 +29,8 @@ pub struct Options {
     pub by_year: bool,
     /// true 면 정리 후 원본을 앱 내 휴지통으로 보관(복원 가능), false 면 원본 유지
     pub trash_source: bool,
+    /// true 면 모든 이미지 파일명 뒤에 원본 폴더명을 접미사로 붙인다 (예: IMG_001_여행.jpg)
+    pub suffix_all: bool,
     pub dry_run: bool,
 }
 
@@ -100,21 +102,64 @@ pub fn creation_year(p: &Path) -> Option<i32> {
     Some(dt.year())
 }
 
-fn unique_dest(dir: &Path, name: &str, src: &Path, src_hash: &mut Option<[u8; 32]>, planned: &HashSet<PathBuf>) -> Result<Option<(PathBuf, bool)>, std::io::Error> {
-    // Ok(None) => 출력 폴더에 이미 동일 파일이 있음
-    let (stem, ext) = match name.rfind('.') {
+fn split_name(name: &str) -> (&str, &str) {
+    match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
-    };
-    let mut n = 0;
+    }
+}
+
+fn sanitize(s: &str) -> String {
+    let t: String = s.chars().map(|c| if ['<', '>', ':', '"', '/', '\\', '|', '?', '*'].contains(&c) || c.is_control() { '_' } else { c }).collect();
+    let t = t.trim().trim_matches('.').to_string();
+    if t.is_empty() { "폴더".into() } else { t }
+}
+
+/// 이미지가 들어 있던 폴더명(바깥→안쪽, 최대 `level`개)을 "_"로 이은 접미사.
+fn folder_label(src: &Path, level: usize) -> String {
+    let parts: Vec<String> = src
+        .parent()
+        .map(|p| p.components().filter_map(|c| match c {
+            std::path::Component::Normal(n) => Some(sanitize(&n.to_string_lossy())),
+            _ => None,
+        }).collect())
+        .unwrap_or_default();
+    if parts.is_empty() {
+        return "root".into();
+    }
+    parts[parts.len().saturating_sub(level)..].join("_")
+}
+
+fn suffixed_name(orig: &str, src: &Path, level: usize) -> String {
+    if level == 0 {
+        return orig.to_string();
+    }
+    let (stem, ext) = split_name(orig);
+    format!("{stem}_{}{ext}", folder_label(src, level))
+}
+
+/// 출력 폴더에서 실제로 쓸 경로를 정한다. Ok(None) => 출력 폴더에 이미 동일 파일이 있음.
+/// 이름이 겹치고 내용이 다르면 `alt`(폴더명 접미사 이름) → `_2`, `_3` … 순으로 시도한다.
+fn unique_dest(dir: &Path, name: &str, src: &Path, src_hash: &mut Option<[u8; 32]>, planned: &HashSet<PathBuf>, alt: Option<&str>) -> Result<Option<(PathBuf, bool)>, std::io::Error> {
+    let mut names: Vec<String> = vec![name.to_string()];
+    if let Some(a) = alt {
+        names.push(a.to_string());
+    }
+    let mut i = 0;
     loop {
-        let cand = if n == 0 { dir.join(name) } else { dir.join(format!("{stem} ({n}){ext}")) };
+        let nm = if i < names.len() {
+            names[i].clone()
+        } else {
+            let (stem, ext) = split_name(names.last().unwrap());
+            format!("{stem}_{}{ext}", i - names.len() + 2)
+        };
+        let cand = dir.join(&nm);
+        i += 1;
         if planned.contains(&cand) {
-            n += 1;
             continue;
         }
         if !cand.exists() {
-            return Ok(Some((cand, n > 0)));
+            return Ok(Some((cand, i > 1)));
         }
         if fs::metadata(&cand)?.len() == fs::metadata(src)?.len() {
             if src_hash.is_none() {
@@ -124,7 +169,6 @@ fn unique_dest(dir: &Path, name: &str, src: &Path, src_hash: &mut Option<[u8; 32
                 return Ok(None);
             }
         }
-        n += 1;
     }
 }
 
@@ -230,6 +274,66 @@ pub fn run(opt: Options, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
             return;
         }
     }
+    // 파일명 계획: 같은 폴더에 같은 이름이 겹치면 겹친 파일 "모두" 폴더명 접미사로 구분한다.
+    send(Msg::Phase("파일명 계획 중...".into()));
+    let dirs: Vec<PathBuf> = keep
+        .par_iter()
+        .map(|&i| {
+            if opt.by_year {
+                match creation_year(&files[i].0) {
+                    Some(y) => opt.output.join(y.to_string()),
+                    None => opt.output.join("연도미상"),
+                }
+            } else {
+                opt.output.clone()
+            }
+        })
+        .collect();
+    let orig_names: Vec<String> = keep
+        .iter()
+        .map(|&i| files[i].0.file_name().and_then(|s| s.to_str()).unwrap_or("image").to_string())
+        .collect();
+    let mut level: Vec<usize> = vec![0; keep.len()];
+    {
+        let mut groups: HashMap<(PathBuf, String), Vec<usize>> = HashMap::new();
+        for k in 0..keep.len() {
+            groups.entry((dirs[k].clone(), orig_names[k].to_lowercase())).or_default().push(k);
+        }
+        for members in groups.values() {
+            if members.len() > 1 || opt.suffix_all {
+                for &m in members {
+                    level[m] = 1;
+                }
+            }
+        }
+        // 접미사가 같아 다시 겹치면 상위 폴더명을 더 붙여 구분
+        for _ in 0..8 {
+            let mut seen: HashMap<(PathBuf, String), Vec<usize>> = HashMap::new();
+            for k in 0..keep.len() {
+                let nm = suffixed_name(&orig_names[k], &files[keep[k]].0, level[k]).to_lowercase();
+                seen.entry((dirs[k].clone(), nm)).or_default().push(k);
+            }
+            let mut changed = false;
+            for v in seen.values().filter(|v| v.len() > 1) {
+                for &m in v {
+                    level[m] += 1;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    let plan: Vec<(PathBuf, String, Option<String>)> = (0..keep.len())
+        .map(|k| {
+            let src = &files[keep[k]].0;
+            let name = suffixed_name(&orig_names[k], src, level[k]);
+            let alt = if level[k] == 0 { Some(suffixed_name(&orig_names[k], src, 1)) } else { None };
+            (dirs[k].clone(), name, alt)
+        })
+        .collect();
+    send(Msg::Phase(if opt.dry_run { "결과 분석 중..." } else { "복사 중..." }.into()));
     let total = keep.len();
     for (n, &i) in keep.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -241,29 +345,23 @@ pub fn run(opt: Options, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
         }
         let src = &files[i].0;
         let _ = tx.send(Msg::Current(src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
-        let dir = if opt.by_year {
-            match creation_year(src) {
-                Some(y) => opt.output.join(y.to_string()),
-                None => opt.output.join("연도미상"),
-            }
-        } else {
-            opt.output.clone()
-        };
+        let (dir, name, alt) = plan[n].clone();
         let year_label = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("image").to_string();
+        let orig_name = orig_names[n].clone();
         let mut h = hashes.get(&i).copied();
         let res: std::io::Result<()> = (|| {
             if !opt.dry_run {
                 fs::create_dir_all(&dir)?;
             }
-            match unique_dest(&dir, &name, src, &mut h, &planned)? {
+            match unique_dest(&dir, &name, src, &mut h, &planned, alt.as_deref())? {
                 None => {
                     rep.duplicates += 1;
                     rep.saved_bytes += files[i].1;
                     let _ = tx.send(Msg::Log(format!("출력 폴더에 이미 존재: {}", src.display())));
                     kept_ok.insert(i);
                 }
-                Some((dest, renamed)) => {
+                Some((dest, _)) => {
+                    let renamed = dest.file_name().map(|f| f.to_string_lossy() != orig_name.as_str()).unwrap_or(false);
                     *rep.years.entry(if opt.by_year { year_label.clone() } else { "전체".into() }).or_default() += 1;
                     if renamed {
                         rep.renamed += 1;
@@ -272,7 +370,7 @@ pub fn run(opt: Options, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
                         }
                         let _ = tx.send(Msg::Log(format!(
                             "이름 변경: {} → {}",
-                            name,
+                            orig_name,
                             dest.file_name().unwrap().to_string_lossy()
                         )));
                     }
@@ -348,16 +446,18 @@ mod tests {
         png(&s.join("c/x.png"), 200); // 이름만 같고 내용 다름 → 이름 변경
         png(&s.join("c/y.png"), 90);
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s.clone(), output: o.clone(), by_year: true, trash_source: false, dry_run: false },
+        run(Options { source: s.clone(), output: o.clone(), by_year: true, trash_source: false, suffix_all: false, dry_run: false },
             tx, Arc::new(AtomicBool::new(false)));
         let rep = rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap();
-        assert_eq!((rep.scanned, rep.duplicates, rep.renamed, rep.copied, rep.errors), (4, 1, 1, 3, 0));
+        assert_eq!((rep.scanned, rep.duplicates, rep.renamed, rep.copied, rep.errors), (4, 1, 2, 3, 0));
         let year = chrono::Local::now().format("%Y").to_string();
-        let n = fs::read_dir(o.join(&year)).unwrap().count();
-        assert_eq!(n, 3);
+        let mut names: Vec<String> = fs::read_dir(o.join(&year)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        // 이름이 겹친 두 파일 모두 폴더명 접미사로 구분 (괄호 번호 없음)
+        assert_eq!(names, vec!["x_a.png", "x_c.png", "y.png"]);
         // 재실행해도 이미 있는 동일 파일은 중복 처리되어 늘어나지 않음
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s, output: o.clone(), by_year: true, trash_source: false, dry_run: false }, tx, Arc::new(AtomicBool::new(false)));
+        run(Options { source: s, output: o.clone(), by_year: true, trash_source: false, suffix_all: false, dry_run: false }, tx, Arc::new(AtomicBool::new(false)));
         let _ = rx.iter().count();
         assert_eq!(fs::read_dir(o.join(&year)).unwrap().count(), 3);
     }
@@ -371,7 +471,7 @@ mod tests {
         png(&s.join("b/x_copy.png"), 10); // 중복
         png(&s.join("c/y.png"), 90);
         let (tx, rx) = std::sync::mpsc::channel();
-        run(Options { source: s.clone(), output: o.clone(), by_year: false, trash_source: true, dry_run: false },
+        run(Options { source: s.clone(), output: o.clone(), by_year: false, trash_source: true, suffix_all: false, dry_run: false },
             tx, Arc::new(AtomicBool::new(false)));
         let rep = rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap();
         assert_eq!((rep.copied, rep.duplicates, rep.trashed, rep.errors), (2, 1, 3, 0));
@@ -384,5 +484,44 @@ mod tests {
             crate::bin_store::restore(&it.id).unwrap();
         }
         assert!(s.join("a/x.png").exists() && s.join("c/y.png").exists());
+    }
+
+    fn run_opts(s: &Path, o: &Path, suffix_all: bool) -> Report {
+        let (tx, rx) = std::sync::mpsc::channel();
+        run(Options { source: s.to_path_buf(), output: o.to_path_buf(), by_year: false, trash_source: false, suffix_all, dry_run: false },
+            tx, Arc::new(AtomicBool::new(false)));
+        rx.iter().find_map(|m| if let Msg::Done(r) = m { Some(r) } else { None }).unwrap()
+    }
+
+    fn names_in(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn suffix_all_adds_folder_name_to_every_file() {
+        let base = std::env::temp_dir().join("ic_test_suffix");
+        let _ = fs::remove_dir_all(&base);
+        let (s, o) = (base.join("src"), base.join("out"));
+        png(&s.join("여행/p.png"), 10);
+        png(&s.join("가족/q.png"), 90);
+        let rep = run_opts(&s, &o, true);
+        assert_eq!((rep.copied, rep.renamed, rep.errors), (2, 2, 0));
+        assert_eq!(names_in(&o), vec!["p_여행.png", "q_가족.png"]);
+    }
+
+    #[test]
+    fn same_parent_name_gets_longer_suffix_no_parentheses() {
+        let base = std::env::temp_dir().join("ic_test_samepar");
+        let _ = fs::remove_dir_all(&base);
+        let (s, o) = (base.join("src"), base.join("out"));
+        png(&s.join("1/x/p.png"), 10);
+        png(&s.join("2/x/p.png"), 200);
+        let rep = run_opts(&s, &o, false);
+        assert_eq!((rep.copied, rep.errors), (2, 0));
+        let n = names_in(&o);
+        assert_eq!(n, vec!["p_1_x.png", "p_2_x.png"]);
+        assert!(n.iter().all(|x| !x.contains('(')));
     }
 }

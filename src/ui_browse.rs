@@ -101,7 +101,7 @@ impl App {
                     }
                     if let Some(d) = self.selected_dir.clone() {
                         if icon_btn(ui, p, ic::MERGE, "현재 폴더 정리하기…", false).clicked() {
-                            self.quick = Some(QuickOrg { out: suggest_output(&d), src: d, by_year: self.org.by_year, trash_source: self.org.trash_source });
+                            self.quick = Some(QuickOrg { out: suggest_output(&d), src: d, by_year: self.org.by_year, trash_source: self.org.trash_source, suffix_all: self.org.suffix_all });
                         }
                     }
                     ui.add_space(8.0);
@@ -299,6 +299,7 @@ impl App {
                     out: suggest_output(path),
                     by_year: self.org.by_year,
                     trash_source: self.org.trash_source,
+                    suffix_all: self.org.suffix_all,
                 });
                 ui.close();
             }

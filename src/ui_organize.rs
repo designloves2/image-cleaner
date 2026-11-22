@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 /// 옵션 카드: 연도별 분류 + 원본 처리(유지 / 앱 휴지통으로 보관)
-pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, trash_source: &mut bool, enabled: bool) {
+pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, suffix_all: &mut bool, trash_source: &mut bool, enabled: bool) {
     card(ui, p, |ui| {
         ui.set_min_width(ui.available_width());
         ui.add_enabled_ui(enabled, |ui| {
@@ -19,6 +19,21 @@ pub fn options_card(ui: &mut Ui, p: &Palette, by_year: &mut bool, trash_source: 
                     switch(ui, p, by_year);
                 });
             });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("모든 파일명에 원본 폴더명 붙이기").strong());
+                    ui.label(RichText::new("여러 하위 폴더를 합칠 때 IMG_001_여행.jpg 처럼 출처 폴더명을 접미사로 추가").size(12.5).color(p.weak));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    switch(ui, p, suffix_all);
+                });
+            });
+            if !*suffix_all {
+                ui.label(RichText::new("꺼져 있어도, 이미지는 다른데 파일명만 같은 경우에는 두 파일 모두 폴더명 접미사로 구분합니다 (번호 괄호 사용 안 함).").size(12.0).color(p.weak));
+            }
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
@@ -101,9 +116,10 @@ impl App {
         let idle = self.org.state == RunState::Idle;
         folder_field(ui, p, ic::FOLDER_OPEN, "원본 폴더", "하위 폴더까지 모두 스캔합니다 (폴더를 끌어다 놓아도 돼요)", &mut self.org.src, idle, true);
         folder_field(ui, p, ic::NEW_FOLDER, "출력 폴더", "정리된 이미지가 모이는 곳", &mut self.org.out, idle, false);
-        let (mut y, mut t) = (self.org.by_year, self.org.trash_source);
-        options_card(ui, p, &mut y, &mut t, idle);
+        let (mut y, mut sx, mut t) = (self.org.by_year, self.org.suffix_all, self.org.trash_source);
+        options_card(ui, p, &mut y, &mut sx, &mut t, idle);
         self.org.by_year = y;
+        self.org.suffix_all = sx;
         self.org.trash_source = t;
         let src_ok = Path::new(&self.org.src).is_dir();
         let ok = src_ok && !self.org.out.trim().is_empty() && self.org.src.trim_end_matches('\\') != self.org.out.trim_end_matches('\\');
@@ -582,7 +598,7 @@ impl App {
                 let mut out = q.out.clone();
                 folder_field(ui, p, ic::NEW_FOLDER, "결과 폴더", "정리된 이미지가 저장될 곳 (없으면 새로 만듭니다)", &mut out, true, false);
                 q.out = out;
-                options_card(ui, p, &mut q.by_year, &mut q.trash_source, true);
+                options_card(ui, p, &mut q.by_year, &mut q.suffix_all, &mut q.trash_source, true);
                 let ok = !q.out.trim().is_empty() && Path::new(&q.out) != q.src.as_path();
                 ui.horizontal(|ui| {
                     if button(ui, p, "", "취소", false, true).clicked() {
@@ -605,6 +621,7 @@ impl App {
             self.org.out = q.out;
             self.org.by_year = q.by_year;
             self.org.trash_source = q.trash_source;
+            self.org.suffix_all = q.suffix_all;
             self.tab = Tab::Organize;
             self.start_organize(dry);
         } else if close || r.should_close() {
