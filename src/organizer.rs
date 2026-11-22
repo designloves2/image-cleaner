@@ -471,6 +471,7 @@ mod tests {
 
     #[test]
     fn trash_source_moves_originals_to_app_bin() {
+        crate::bin_store::init_test_root();
         let base = std::env::temp_dir().join("ic_test_trash");
         let _ = fs::remove_dir_all(&base);
         let (s, o) = (base.join("src"), base.join("out"));

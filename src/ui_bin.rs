@@ -28,6 +28,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let mut restore: Vec<String> = vec![];
         let mut purge: Vec<String> = vec![];
+        let mut restore_to: Vec<String> = vec![];
         Frame::new().inner_margin(Margin::same(26)).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 12.0;
             ui.horizontal(|ui| {
@@ -43,6 +44,9 @@ impl App {
                     let has_sel = !self.bin_sel.is_empty();
                     if button(ui, p, ic::CLOSE, "선택 영구 삭제", false, has_sel).clicked() {
                         purge = self.bin_sel.iter().cloned().collect();
+                    }
+                    if button(ui, p, ic::FOLDER_OPEN, "다른 위치로 복원…", false, has_sel).on_hover_text("선택한 폴더 아래에 원래 폴더명으로 복원합니다").clicked() {
+                        restore_to = self.bin_sel.iter().cloned().collect();
                     }
                     if button(ui, p, ic::BACK, "선택 복원", true, has_sel).clicked() {
                         restore = self.bin_sel.iter().cloned().collect();
@@ -120,7 +124,8 @@ impl App {
                             self.bin_sel.insert(it.id.clone());
                         }
                         resp.context_menu(|ui| {
-                            if ui.button("복원").clicked() { restore = vec![it.id.clone()]; ui.close(); }
+                            if ui.button("원래 위치로 복원").clicked() { restore = vec![it.id.clone()]; ui.close(); }
+                            if ui.button("다른 위치로 복원…").clicked() { restore_to = vec![it.id.clone()]; ui.close(); }
                             if ui.button("영구 삭제").clicked() { purge = vec![it.id.clone()]; ui.close(); }
                         });
                     }
@@ -128,21 +133,22 @@ impl App {
             });
         });
         if !restore.is_empty() {
-            let (mut ok, mut last) = (0, None);
-            for id in &restore {
-                if let Ok(path) = bin_store::restore(id) {
-                    ok += 1;
-                    last = Some(path);
-                }
-            }
+            // 원래 위치로 복원 (같은 이름의 다른 파일은 '_복원' 이름, 동일 파일은 휴지통에서만 제거)
+            let summary = bin_store::restore_many(&restore);
             self.bin_sel.clear();
             self.bin_dirty = true;
             self.reload();
-            let msg = match (ok, last) {
-                (1, Some(p)) => format!("복원했습니다: {}", p.display()),
-                _ => format!("{ok}개를 원래 위치로 복원했습니다"),
-            };
-            self.toast(&ctx, msg);
+            self.toast(&ctx, summary.text());
+        }
+        if !restore_to.is_empty() {
+            if let Some(dest) = rfd::FileDialog::new().set_title("복원할 위치 선택").pick_folder() {
+                // 선택한 폴더 아래에 원래 폴더명으로 하위 폴더를 만들어 복원 (같은 이름의 폴더는 상위 폴더명으로 구분)
+                let summary = bin_store::restore_to(&restore_to, &dest);
+                self.bin_sel.clear();
+                self.bin_dirty = true;
+                self.reload();
+                self.toast(&ctx, summary.text());
+            }
         }
         if !purge.is_empty() {
             for id in &purge {
